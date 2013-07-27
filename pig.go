@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
+	//"io/ioutil"
 	"log"
 	"math/rand"
 	"net"
@@ -48,8 +48,7 @@ func main() {
 var players = make(chan Player)
 
 func match(p Player) {
-	p.Write([]byte("Waiting for a player..."))
-	//fmt.Fprint(p "Waiting for a player...")
+	p.Write([]byte("Waiting for a player...\n"))
 
 	select {
 	case players <- p:
@@ -57,9 +56,8 @@ func match(p Player) {
 	case p2 := <-players:
 		Play(p, p2)
 	case <-time.After(5 * time.Second):
-		//r, w := io.Pipe()
-		w := ioutil.Discard
-		c := &computer{w, "computer1", 0, 0, 0, 27}
+		//w := ioutil.Discard
+		c := &computer{Name: "computer1", max: 27}
 		Play(p, c)
 	}
 }
@@ -71,22 +69,17 @@ func Play(a, b Player) {
 again:
 	a.Reset()
 	b.Reset()
-	a.Write([]byte("Game Begin\n"))
+	a.Write([]byte(fmt.Sprintf("%s VS %s, Game Begin\n", a.GetName(), b.GetName())))
 	a.Write([]byte("----------------------------\n"))
-	b.Write([]byte("Game Begin\n"))
+	b.Write([]byte(fmt.Sprintf("%s VS %s, Game Begin\n", a.GetName(), b.GetName())))
 	b.Write([]byte("----------------------------\n"))
-	var players = make(chan Player, 2)
-	players <- a
-	players <- b
+	current, opponent := a, b
 	for {
-		player := <-players
-		a.Write([]byte(fmt.Sprintf("----------Now %s turn----------\n", player.GetName())))
-		b.Write([]byte(fmt.Sprintf("----------Now %s turn----------\n", player.GetName())))
-		score := player.Play()
+		score := current.Play(opponent)
 		if score > WIN {
-			a.Write([]byte(fmt.Sprintf("GAME OVER.\n %s win.\n", player.GetName())))
+			a.Write([]byte(fmt.Sprintf("GAME OVER.\n %s win.\n", current.GetName())))
 			a.Write([]byte(fmt.Sprintf("Play again? y/n\n")))
-			b.Write([]byte(fmt.Sprintf("GAME OVER.\n %s win.\n", player.GetName())))
+			b.Write([]byte(fmt.Sprintf("GAME OVER.\n %s win.\n", current.GetName())))
 			b.Write([]byte(fmt.Sprintf("Play again? y/n\n")))
 
 			var buffer []byte
@@ -99,22 +92,17 @@ again:
 			if string(buffer) == "n\n" {
 				break
 			} else {
-				players <- player
 				goto again //need modfiy here
 			}
 		}
-		a.Write([]byte(fmt.Sprintf("Player %s get %d in this turn, now total score is %d\n",
-			player.GetName(), player.GetThisTurn(), player.GetScore())))
-		b.Write([]byte(fmt.Sprintf("Player %s get %d in this turn, now total score is %d\n",
-			player.GetName(), player.GetThisTurn(), player.GetScore())))
-		players <- player
+		current, opponent = opponent, current
 	}
 
 }
 
 type Player interface {
 	io.ReadWriteCloser
-	Play() int
+	Play(opponent Player) int
 	GetName() string
 	GetThisTurn() int
 	GetScore() int
@@ -123,7 +111,7 @@ type Player interface {
 
 type computer struct {
 	//Rc        io.ReadCloser
-	Wt        io.Writer
+	//Wt        io.Writer
 	Name      string
 	Score     int
 	ThisTurn  int
@@ -135,7 +123,7 @@ func (player *computer) Read(p []byte) (n int, err error) {
 	return 0, nil //player.Rc.Read(p)
 }
 func (player *computer) Write(p []byte) (n int, err error) {
-	return player.Wt.Write(p)
+	return 9, nil //player.Wt.Write(p)
 }
 func (player *computer) Close() error {
 	return nil //player.Rc.Close()
@@ -155,20 +143,25 @@ func (player *computer) Reset() {
 	player.RollScore = 0
 	return
 }
-func (player *computer) Play() int {
+func (player *computer) Play(opponent Player) int {
+	opponent.Write([]byte(fmt.Sprintf("----------Now %s turn----------\n", player.GetName())))
 	player.ThisTurn = 0
-	for player.ThisTurn < player.max {
+	end := false
+	for player.ThisTurn < player.max && !end {
 		player.RollScore = rand.Intn(6) + 1
-		player.Wt.Write([]byte(fmt.Sprintf("This turn %d, rolling... get %d.\n", player.ThisTurn, player.RollScore)))
 		if player.RollScore == 1 {
 			player.ThisTurn = 0
-			break
+			time.Sleep(100 * time.Millisecond)
+			end = true
 		} else {
 			player.ThisTurn += player.RollScore
 		}
+		opponent.Write([]byte(fmt.Sprintf("Rolling... get %d, this turn %d.\n",
+			player.RollScore, player.ThisTurn)))
 	}
 	player.Score += player.ThisTurn
-	player.Wt.Write([]byte(fmt.Sprintf("Finally, total score %d, this turn %d.\n", player.Score, player.ThisTurn)))
+	opponent.Write([]byte(fmt.Sprintf("Finally, this turn %d, total score (%d vs %d).\n",
+		player.ThisTurn, player.Score, opponent.GetScore())))
 	return player.Score
 }
 
@@ -223,37 +216,46 @@ func (player *user) Roll() (end bool) {
 		end = true
 	} else {
 		player.ThisTurn += player.RollScore
+		time.Sleep(100 * time.Millisecond)
 	}
 	return
 }
-func (player *user) Play() int {
-	dec := json.NewDecoder(player.Rwc)
-	enc := json.NewEncoder(player.Rwc)
-	end := false
+func (player *user) Play(opponent Player) int {
+	player.Write([]byte(fmt.Sprintf("----------Now %s turn----------\n", player.GetName())))
+	opponent.Write([]byte(fmt.Sprintf("----------Now %s turn----------\n", player.GetName())))
+	dec := json.NewDecoder(player)
+	//enc := json.NewEncoder(player)
 	player.ThisTurn = 0
 	player.RollScore = 0
+	end := false
 	for !end {
-		enc.Encode(player)
-		player.Rwc.Write([]byte(fmt.Sprintf("roll: {\"CMD\":0} or stay: {\"CMD\":1}?\n")))
+		//enc.Encode(player)
+		player.Write([]byte(fmt.Sprintf("roll: {\"CMD\":0} or stay: {\"CMD\":1}?\n")))
 		var msg CmdMessage
 		if err := dec.Decode(&msg); err == io.EOF {
 			break
 		} else if err != nil {
-			player.Rwc.Write([]byte(fmt.Sprintf("%v", err)))
+			player.Write([]byte(fmt.Sprintf("%v", err)))
 			log.Fatal("Error when decode: ", err)
 		} else {
 			switch msg.CMD {
 			case ROLL:
-				player.Rwc.Write([]byte(fmt.Sprintf("Rolling... \n")))
 				end = player.Roll()
+				player.Write([]byte(fmt.Sprintf("Rolling... get %d, this turn %d.\n",
+					player.RollScore, player.ThisTurn)))
+				opponent.Write([]byte(fmt.Sprintf("Rolling... get %d, this turn %d.\n",
+					player.RollScore, player.ThisTurn)))
 			case STAY:
 				end = true
 			default:
-				player.Rwc.Write([]byte(fmt.Sprintf("Invalid input, roll: {\"CMD\":0} or stay: {\"CMD\":1}?")))
+				player.Write([]byte(fmt.Sprintf("Invalid input, roll: {\"CMD\":0} or stay: {\"CMD\":1}?")))
 			}
 		}
 	}
 	player.Score += player.ThisTurn
-	enc.Encode(player)
+	player.Write([]byte(fmt.Sprintf("Finally, this turn %d, total score (%d vs %d).\n",
+		player.ThisTurn, player.Score, opponent.GetScore())))
+	opponent.Write([]byte(fmt.Sprintf("Finally, this turn %d, total score (%d vs %d).\n",
+		player.ThisTurn, player.Score, opponent.GetScore())))
 	return player.Score
 }
