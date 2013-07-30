@@ -1,25 +1,41 @@
 package main
 
 import (
+	"code.google.com/p/go.net/websocket"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"io"
-	//"io/ioutil"
 	"log"
 	"math/rand"
 	"net"
+	"net/http"
 	"time"
 )
 
 const (
-	WIN = 100
+	tcpListenAddr = "localhost:4000"
+	webListenAddr = "localhost:4001"
+	WIN           = 100
 )
 
 func main() {
-
 	rand.Seed(time.Now().Unix())
 
-	l, err := net.Listen("tcp", "localhost:4000")
+	//tcp server
+	go netListen()
+
+	//http server
+	http.HandleFunc("/", rootHandler)
+	http.Handle("/pig", websocket.Handler(websocketHandler))
+	err := http.ListenAndServe(webListenAddr, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func netListen() {
+	l, err := net.Listen("tcp", tcpListenAddr)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -43,6 +59,37 @@ func main() {
 		}
 		go match(&player)
 	}
+}
+
+func rootHandler(w http.ResponseWriter, r *http.Request) {
+	t, _ := template.ParseFiles("pig.html")
+	t.Execute(w, webListenAddr)
+}
+
+type webplayer struct {
+	Player
+	done chan bool
+}
+
+func (s webplayer) Close() error {
+	s.done <- true
+	return nil
+}
+
+func websocketHandler(ws *websocket.Conn) {
+	u := user{Rwc: ws, Name: "user1"}
+	s := webplayer{&u, make(chan bool)}
+	go match(&s)
+	<-s.done
+}
+
+type Player interface {
+	io.ReadWriteCloser
+	Play(opponent Player) int
+	GetName() string
+	GetThisTurn() int
+	GetScore() int
+	Reset()
 }
 
 var players = make(chan Player)
@@ -69,18 +116,15 @@ func Play(a, b Player) {
 again:
 	a.Reset()
 	b.Reset()
-	a.Write([]byte(fmt.Sprintf("%s VS %s, Game Begin\n", a.GetName(), b.GetName())))
-	a.Write([]byte("----------------------------\n"))
-	b.Write([]byte(fmt.Sprintf("%s VS %s, Game Begin\n", a.GetName(), b.GetName())))
-	b.Write([]byte("----------------------------\n"))
+	both := io.MultiWriter(a, b)
+	both.Write([]byte(fmt.Sprintf("%s VS %s, Game Begin\n", a.GetName(), b.GetName())))
+	both.Write([]byte("----------------------------\n"))
 	current, opponent := a, b
 	for {
 		score := current.Play(opponent)
 		if score > WIN {
-			a.Write([]byte(fmt.Sprintf("GAME OVER.\n %s win.\n", current.GetName())))
-			a.Write([]byte(fmt.Sprintf("Play again? y/n\n")))
-			b.Write([]byte(fmt.Sprintf("GAME OVER.\n %s win.\n", current.GetName())))
-			b.Write([]byte(fmt.Sprintf("Play again? y/n\n")))
+			both.Write([]byte(fmt.Sprintf("GAME OVER.\n %s win.\n", current.GetName())))
+			both.Write([]byte(fmt.Sprintf("Play again? y/n\n")))
 
 			var buffer []byte
 			buffer = make([]byte, 2)
@@ -97,16 +141,6 @@ again:
 		}
 		current, opponent = opponent, current
 	}
-
-}
-
-type Player interface {
-	io.ReadWriteCloser
-	Play(opponent Player) int
-	GetName() string
-	GetThisTurn() int
-	GetScore() int
-	Reset()
 }
 
 type computer struct {
@@ -221,8 +255,8 @@ func (player *user) Roll() (end bool) {
 	return
 }
 func (player *user) Play(opponent Player) int {
-	player.Write([]byte(fmt.Sprintf("----------Now %s turn----------\n", player.GetName())))
-	opponent.Write([]byte(fmt.Sprintf("----------Now %s turn----------\n", player.GetName())))
+	both := io.MultiWriter(player, opponent)
+	both.Write([]byte(fmt.Sprintf("----------Now %s turn----------\n", player.GetName())))
 	dec := json.NewDecoder(player)
 	//enc := json.NewEncoder(player)
 	player.ThisTurn = 0
@@ -241,9 +275,7 @@ func (player *user) Play(opponent Player) int {
 			switch msg.CMD {
 			case ROLL:
 				end = player.Roll()
-				player.Write([]byte(fmt.Sprintf("Rolling... get %d, this turn %d.\n",
-					player.RollScore, player.ThisTurn)))
-				opponent.Write([]byte(fmt.Sprintf("Rolling... get %d, this turn %d.\n",
+				both.Write([]byte(fmt.Sprintf("Rolling... get %d, this turn %d.\n",
 					player.RollScore, player.ThisTurn)))
 			case STAY:
 				end = true
@@ -253,9 +285,7 @@ func (player *user) Play(opponent Player) int {
 		}
 	}
 	player.Score += player.ThisTurn
-	player.Write([]byte(fmt.Sprintf("Finally, this turn %d, total score (%d vs %d).\n",
-		player.ThisTurn, player.Score, opponent.GetScore())))
-	opponent.Write([]byte(fmt.Sprintf("Finally, this turn %d, total score (%d vs %d).\n",
+	both.Write([]byte(fmt.Sprintf("Finally, this turn %d, total score (%d vs %d).\n",
 		player.ThisTurn, player.Score, opponent.GetScore())))
 	return player.Score
 }
