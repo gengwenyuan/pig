@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<script>
+
+var input, output, websocket;
+
+function showMessage(m) {
+	var p = document.createElement("p");
+	p.innerHTML = m;
+	output.appendChild(p);
+}
+
+function onMessage(e) {
+	showMessage(e.data);
+}
+
+function onClose() {
+	showMessage("Connection closed.");
+}
+function onRoll() {
+	var msg = "{\"CMD\":0}"
+	websocket.send(msg);
+}
+function onStay() {
+	var msg = "{\"CMD\":1}"
+	websocket.send(msg);
+}
+function sendMessage() {
+	var m = input.value;
+	input.value = "";
+	websocket.send(m + "\n");
+	showMessage(m);
+}
+
+function onKey(e) {
+	if (e.keyCode == 13) {
+		sendMessage();
+	}
+}
+
+function init() {
+	input = document.getElementById("input");
+	input.addEventListener("keyup", onKey, false);
+
+	output = document.getElementById("output");
+
+	websocket = new WebSocket("ws://{{.}}/pig");
+	websocket.onmessage = onMessage;
+	websocket.onclose = onClose;
+}
+
+window.addEventListener("load", init, false);
+
+</script>
+</head>
+<body>
+<div id="output"></div>
+msg:<input id="input" type="text"><br/>
+<button  id="roll" type="button" onclick="onRoll()">Roll</button>
+<button  id="roll" type="button" onclick="onStay()">Stay</button>
+</body>
+</html>
